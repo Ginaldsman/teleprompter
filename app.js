@@ -20,6 +20,7 @@
     mirrorH: false,
     mirrorV: false,
     countdown: true,
+    camera: false,
   });
 
   const LIMITS = Object.freeze({
@@ -54,7 +55,10 @@
     mirrorH: $('mirrorH'),
     mirrorV: $('mirrorV'),
     countdownToggle: $('countdownToggle'),
+    cameraToggle: $('cameraToggle'),
+    cameraHint: $('cameraHint'),
     startBtn: $('startBtn'),
+    startLabel: $('startLabel'),
     startBar: $('startBar'),
     startHint: $('startHint'),
     themeColorMeta: $('themeColorMeta'),
@@ -74,6 +78,14 @@
     fasterBtn: $('fasterBtn'),
     speedReadout: $('speedReadout'),
     fullscreenBtn: $('fullscreenBtn'),
+    cameraBtn: $('cameraBtn'),
+    cameraLayer: $('cameraLayer'),
+    cameraPreview: $('cameraPreview'),
+    recordBtn: $('recordBtn'),
+    recordIcon: document.querySelector('#recordBtn .icon-record'),
+    stopIcon: document.querySelector('#recordBtn .icon-stop'),
+    recBadge: $('recBadge'),
+    recTime: $('recTime'),
     iconPlay: document.querySelector('#playPauseBtn .icon-play'),
     iconPause: document.querySelector('#playPauseBtn .icon-pause'),
     iconReplay: document.querySelector('#playPauseBtn .icon-replay'),
@@ -104,6 +116,18 @@
     suppressPresentationExit: false,
     wakeLock: null,
     saveTimer: 0,
+    cameraSupported: false,
+    cameraActive: false,
+    cameraStarting: false,
+    cameraStream: null,
+    cameraRequestId: 0,
+    micStream: null,
+    recorder: null,
+    recorderStarting: false,
+    recording: false,
+    recordingStartedAt: 0,
+    recordTimer: 0,
+    recordedChunks: [],
   };
 
   let prefs = loadPrefs();
@@ -190,6 +214,7 @@
       mirrorH: saved.mirrorH === true,
       mirrorV: saved.mirrorV === true,
       countdown: saved.countdown !== false,
+      camera: saved.camera === true,
     };
   }
 
@@ -248,6 +273,7 @@
     el.mirrorH.checked = prefs.mirrorH;
     el.mirrorV.checked = prefs.mirrorV;
     el.countdownToggle.checked = prefs.countdown;
+    el.cameraToggle.checked = prefs.camera;
     document.querySelectorAll('input[name="align"]').forEach((radio) => {
       radio.checked = radio.value === prefs.align;
     });
@@ -256,6 +282,7 @@
   function updateStats() {
     const words = countWords(prefs.text);
     const duration = words > 0 ? (words / prefs.speed) * 60 : 0;
+    const withCamera = prefs.camera && state.cameraSupported;
 
     el.wordCount.textContent = words === 1 ? '1 palavra' : `${words} palavras`;
     el.durationEstimate.textContent = words > 0
@@ -265,10 +292,15 @@
     el.startBtn.disabled = words === 0;
     el.clearTextBtn.disabled = words === 0;
     el.startBar.classList.toggle('is-sticky', words > 0);
+    el.startLabel.textContent = withCamera ? 'Iniciar com câmera' : 'Iniciar teleprompter';
 
-    el.startHint.textContent = words > 0
-      ? 'Funciona na vertical ou na horizontal — o texto se ajusta à tela.'
-      : 'Digite ou cole um roteiro para liberar o botão.';
+    if (words === 0) {
+      el.startHint.textContent = 'Digite ou cole um roteiro para liberar o botão.';
+    } else if (withCamera) {
+      el.startHint.textContent = 'A câmera frontal será ativada. O texto não aparece no vídeo gravado.';
+    } else {
+      el.startHint.textContent = 'Funciona na vertical ou na horizontal — o texto se ajusta à tela.';
+    }
   }
 
   function syncSpeedDisplay() {
@@ -594,10 +626,20 @@
     focusPresentation();
 
     // Espera o layout do modo de apresentação antes de medir
-    window.requestAnimationFrame(() => {
+    window.requestAnimationFrame(async () => {
       if (state.mode !== 'presentation') return;
       measure(false);
+
+      let cameraError = '';
+      if (prefs.camera && state.cameraSupported) {
+        showToast('Solicitando acesso à câmera…', 4000);
+        const result = await startCamera();
+        if (!result.ok && result.message) cameraError = result.message;
+      }
+
+      if (state.mode !== 'presentation') return;
       restart();
+      if (cameraError) showToast(cameraError, 4200);
     });
   }
 
@@ -608,6 +650,7 @@
     state.playing = false;
     stopLoop();
     releaseWakeLock();
+    stopCamera();
     hideToast();
 
     state.mode = 'edit';
@@ -757,6 +800,416 @@
   }
 
   /* ----------------------------------------------------------
+     Câmera e gravação
+     ---------------------------------------------------------- */
+
+  const CAMERA_TIMEOUT_MS = 8000;
+
+  function setupCamera() {
+    const hasApi = Boolean(
+      navigator.mediaDevices &&
+      typeof navigator.mediaDevices.getUserMedia === 'function'
+    );
+    const secure = window.isSecureContext !== false;
+
+    state.cameraSupported = hasApi && secure;
+
+    el.cameraBtn.hidden = !state.cameraSupported;
+    el.recordBtn.hidden = true;
+    el.recBadge.hidden = true;
+
+    if (!state.cameraSupported) {
+      el.cameraToggle.checked = false;
+      el.cameraToggle.disabled = true;
+      el.cameraHint.textContent = secure
+        ? 'Este navegador não oferece acesso à câmera.'
+        : 'A câmera exige HTTPS (ou localhost). Abra o app por uma conexão segura.';
+      return;
+    }
+
+    el.cameraHint.textContent = 'A câmera frontal é ativada ao iniciar a apresentação. O texto não aparece no vídeo gravado.';
+  }
+
+  async function requestCameraStream() {
+    const preferred = {
+      video: {
+        facingMode: { ideal: 'user' },
+        width: { ideal: 1280 },
+        height: { ideal: 720 },
+      },
+      audio: false,
+    };
+
+    try {
+      return await navigator.mediaDevices.getUserMedia(preferred);
+    } catch (error) {
+      const name = error && error.name;
+      if (name === 'OverconstrainedError' || name === 'ConstraintNotSatisfiedError') {
+        return navigator.mediaDevices.getUserMedia({ video: true, audio: false });
+      }
+      throw error;
+    }
+  }
+
+  async function requestCameraStreamWithTimeout(timeoutMs) {
+    const pending = requestCameraStream();
+    let timer = 0;
+
+    const timeout = new Promise((_, reject) => {
+      timer = window.setTimeout(() => {
+        const error = new Error('A câmera demorou para responder');
+        error.name = 'TimeoutError';
+        reject(error);
+      }, timeoutMs);
+    });
+
+    try {
+      return await Promise.race([pending, timeout]);
+    } catch (error) {
+      if (error && error.name === 'TimeoutError') {
+        // Se a permissão for concedida depois do tempo, libera a câmera na hora.
+        pending.then((stream) => {
+          stream.getTracks().forEach((track) => {
+            try { track.stop(); } catch { /* ignora */ }
+          });
+        }).catch(() => {});
+      }
+      throw error;
+    } finally {
+      window.clearTimeout(timer);
+    }
+  }
+
+  function cameraErrorMessage(error) {
+    switch (error && error.name) {
+      case 'NotAllowedError':
+      case 'PermissionDeniedError':
+        return 'Permissão de câmera negada. Libere o acesso nas configurações do navegador.';
+      case 'TimeoutError':
+        return 'A câmera demorou para responder. Você pode tentar de novo pelo botão de câmera.';
+      case 'NotFoundError':
+      case 'DevicesNotFoundError':
+        return 'Nenhuma câmera encontrada neste dispositivo.';
+      case 'NotReadableError':
+      case 'TrackStartError':
+        return 'A câmera está em uso por outro aplicativo.';
+      case 'SecurityError':
+        return 'A câmera exige HTTPS (ou localhost).';
+      case 'OverconstrainedError':
+        return 'A câmera não atende aos requisitos deste navegador.';
+      default:
+        return 'Não foi possível iniciar a câmera.';
+    }
+  }
+
+  async function startCamera() {
+    if (state.cameraActive) return { ok: true };
+    if (state.cameraStarting) return { ok: false };
+    if (!state.cameraSupported) {
+      return { ok: false, message: 'Câmera não disponível neste navegador.' };
+    }
+
+    state.cameraRequestId += 1;
+    const requestId = state.cameraRequestId;
+    state.cameraStarting = true;
+    updateCameraUI();
+
+    try {
+      const stream = await requestCameraStreamWithTimeout(CAMERA_TIMEOUT_MS);
+
+      if (requestId !== state.cameraRequestId || state.mode !== 'presentation') {
+        stream.getTracks().forEach((track) => {
+          try { track.stop(); } catch { /* ignora */ }
+        });
+        return { ok: false };
+      }
+
+      state.cameraStream = stream;
+      const videoTrack = stream.getVideoTracks()[0];
+      if (videoTrack) videoTrack.addEventListener('ended', handleCameraEnded);
+
+      el.cameraPreview.srcObject = stream;
+      try {
+        const playResult = el.cameraPreview.play();
+        if (playResult && typeof playResult.catch === 'function') {
+          playResult.catch(() => {});
+        }
+      } catch {
+        /* autoplay bloqueado — o stream segue ativo */
+      }
+
+      state.cameraActive = true;
+      state.cameraStarting = false;
+      updateCameraUI();
+      return { ok: true };
+    } catch (error) {
+      if (requestId === state.cameraRequestId) state.cameraStarting = false;
+      updateCameraUI();
+      return { ok: false, message: cameraErrorMessage(error) };
+    }
+  }
+
+  function stopCamera() {
+    state.cameraRequestId += 1;
+    state.cameraStarting = false;
+
+    if (state.recorder) {
+      stopRecording();
+    } else {
+      stopMicStream();
+    }
+
+    if (state.cameraStream) {
+      state.cameraStream.getTracks().forEach((track) => {
+        try { track.stop(); } catch { /* ignora */ }
+      });
+      state.cameraStream = null;
+    }
+
+    if (el.cameraPreview) {
+      try { el.cameraPreview.pause(); } catch { /* ignora */ }
+      el.cameraPreview.srcObject = null;
+    }
+
+    state.cameraActive = false;
+    updateCameraUI();
+  }
+
+  function handleCameraEnded() {
+    if (!state.cameraStream) return;
+    stopCamera();
+    if (state.mode === 'presentation') showToast('A câmera foi desligada');
+  }
+
+  function updateCameraUI() {
+    const active = state.cameraActive;
+
+    el.presentationView.classList.toggle('camera-active', active);
+    el.cameraLayer.hidden = !active;
+    el.cameraBtn.dataset.state = active ? 'on' : 'off';
+    el.cameraBtn.setAttribute('aria-pressed', String(active));
+    el.cameraBtn.setAttribute('aria-busy', String(state.cameraStarting));
+
+    const label = active ? 'Desligar câmera' : 'Ligar câmera';
+    el.cameraBtn.setAttribute('aria-label', label);
+    el.cameraBtn.title = active
+      ? 'Desligar câmera'
+      : 'Ligar câmera frontal';
+
+    updateRecordUI();
+  }
+
+  async function toggleCamera() {
+    if (state.cameraStarting) return;
+
+    if (state.cameraActive) {
+      stopCamera();
+      showToast('Câmera desligada');
+      return;
+    }
+
+    const result = await startCamera();
+    if (!result.ok && result.message) showToast(result.message, 3600);
+  }
+
+  /* Gravação: apenas a imagem da câmera (e o microfone, se autorizado).
+     O texto do teleprompter não entra no arquivo. */
+
+  function pickRecordingMime() {
+    if (
+      typeof window.MediaRecorder !== 'function' ||
+      typeof window.MediaRecorder.isTypeSupported !== 'function'
+    ) {
+      return '';
+    }
+    const candidates = [
+      'video/mp4;codecs=avc1.42E01E,mp4a.40.2',
+      'video/mp4',
+      'video/webm;codecs=vp9,opus',
+      'video/webm;codecs=vp8,opus',
+      'video/webm',
+    ];
+    return candidates.find((type) => window.MediaRecorder.isTypeSupported(type)) || '';
+  }
+
+  function stopMicStream() {
+    if (!state.micStream) return;
+    state.micStream.getTracks().forEach((track) => {
+      try { track.stop(); } catch { /* ignora */ }
+    });
+    state.micStream = null;
+  }
+
+  async function startRecording() {
+    if (!state.cameraActive || !state.cameraStream) {
+      showToast('Ligue a câmera para gravar');
+      return;
+    }
+    if (typeof window.MediaRecorder !== 'function') {
+      showToast('Gravação não suportada neste navegador');
+      return;
+    }
+    if (state.recorderStarting || state.recorder) return;
+
+    state.recorderStarting = true;
+
+    let micStream = null;
+    try {
+      micStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    } catch {
+      micStream = null; // segue sem áudio
+    }
+
+    if (!state.cameraActive || !state.cameraStream || state.mode !== 'presentation') {
+      if (micStream) micStream.getTracks().forEach((track) => track.stop());
+      state.recorderStarting = false;
+      return;
+    }
+
+    const tracks = state.cameraStream.getVideoTracks().slice();
+    if (micStream) tracks.push(...micStream.getAudioTracks());
+    const stream = new MediaStream(tracks);
+
+    let recorder;
+    try {
+      const mimeType = pickRecordingMime();
+      recorder = mimeType
+        ? new MediaRecorder(stream, { mimeType, videoBitsPerSecond: 4000000 })
+        : new MediaRecorder(stream);
+    } catch {
+      if (micStream) micStream.getTracks().forEach((track) => track.stop());
+      state.recorderStarting = false;
+      showToast('Não foi possível iniciar a gravação');
+      return;
+    }
+
+    state.recorderStarting = false;
+    state.recorder = recorder;
+    state.micStream = micStream;
+    state.recordedChunks = [];
+
+    recorder.addEventListener('dataavailable', (event) => {
+      if (event.data && event.data.size > 0) state.recordedChunks.push(event.data);
+    });
+    recorder.addEventListener('stop', onRecorderStop);
+    recorder.addEventListener('error', () => {
+      showToast('Erro durante a gravação');
+    });
+
+    try {
+      recorder.start(1000);
+    } catch {
+      state.recorder = null;
+      stopMicStream();
+      updateRecordUI();
+      showToast('Não foi possível iniciar a gravação');
+      return;
+    }
+
+    state.recording = true;
+    state.recordingStartedAt = performance.now();
+    startRecordTimer();
+    updateRecordUI();
+    showToast(micStream ? 'Gravando com áudio' : 'Gravando vídeo sem áudio');
+  }
+
+  function stopRecording() {
+    const recorder = state.recorder;
+    if (!recorder) return;
+    try {
+      if (recorder.state !== 'inactive') recorder.stop();
+    } catch {
+      /* ignora */
+    }
+  }
+
+  function onRecorderStop() {
+    const recorder = state.recorder;
+    const chunks = state.recordedChunks;
+    const type = (recorder && recorder.mimeType) || 'video/webm';
+
+    state.recorder = null;
+    state.recordedChunks = [];
+    state.recording = false;
+    state.recordingStartedAt = 0;
+    stopRecordTimer();
+    stopMicStream();
+    updateRecordUI();
+
+    if (!chunks.length) {
+      showToast('Nenhum trecho de vídeo foi gravado');
+      return;
+    }
+
+    downloadRecording(new Blob(chunks, { type }), type);
+  }
+
+  function downloadRecording(blob, type) {
+    try {
+      const ext = type.indexOf('mp4') !== -1 ? 'mp4' : 'webm';
+      const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+
+      link.href = url;
+      link.download = `teleprompter-${stamp}.${ext}`;
+      link.rel = 'noopener';
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+
+      window.setTimeout(() => URL.revokeObjectURL(url), 15000);
+      showToast(`Vídeo salvo em ${ext.toUpperCase()}`);
+    } catch {
+      showToast('Não foi possível salvar o vídeo');
+    }
+  }
+
+  function toggleRecording() {
+    if (state.recorderStarting) return;
+    if (state.recording || state.recorder) {
+      stopRecording();
+      return;
+    }
+    startRecording();
+  }
+
+  function startRecordTimer() {
+    stopRecordTimer();
+    updateRecordTime();
+    state.recordTimer = window.setInterval(updateRecordTime, 500);
+  }
+
+  function stopRecordTimer() {
+    if (state.recordTimer) {
+      window.clearInterval(state.recordTimer);
+      state.recordTimer = 0;
+    }
+  }
+
+  function updateRecordTime() {
+    const elapsed = state.recordingStartedAt
+      ? (performance.now() - state.recordingStartedAt) / 1000
+      : 0;
+    el.recTime.textContent = formatClock(elapsed);
+  }
+
+  function updateRecordUI() {
+    const recording = state.recording;
+    const canRecord = typeof window.MediaRecorder === 'function';
+
+    el.recordBtn.hidden = !state.cameraActive || !canRecord;
+    el.recordBtn.dataset.recording = String(recording);
+    el.recordIcon.hidden = recording;
+    el.stopIcon.hidden = !recording;
+    el.recBadge.hidden = !recording;
+
+    const label = recording ? 'Parar gravação' : 'Gravar vídeo';
+    el.recordBtn.setAttribute('aria-label', label);
+    el.recordBtn.title = label;
+  }
+
+  /* ----------------------------------------------------------
      Aviso rápido
      ---------------------------------------------------------- */
 
@@ -886,6 +1339,12 @@
       saveNow();
     });
 
+    el.cameraToggle.addEventListener('change', () => {
+      prefs.camera = el.cameraToggle.checked;
+      updateStats();
+      saveNow();
+    });
+
     el.clearTextBtn.addEventListener('click', requestClear);
 
     el.cancelClearBtn.addEventListener('click', () => {
@@ -910,6 +1369,8 @@
     el.slowerBtn.addEventListener('click', () => changeSpeed(-10));
     el.fasterBtn.addEventListener('click', () => changeSpeed(10));
     el.fullscreenBtn.addEventListener('click', toggleFullscreen);
+    el.cameraBtn.addEventListener('click', toggleCamera);
+    el.recordBtn.addEventListener('click', toggleRecording);
 
     // Atalhos de teclado
     window.addEventListener('keydown', (event) => {
@@ -983,6 +1444,7 @@
     syncControls();
     applyTheme();
     applyVisualPrefs();
+    setupCamera();
     updateStats();
     setupFullscreen();
     bindEvents();

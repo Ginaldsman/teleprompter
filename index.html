@@ -120,13 +120,25 @@
             <span class="switch-track" aria-hidden="true"></span>
           </label>
         </div>
+
+        <div class="setting">
+          <label class="switch-row">
+            <span class="switch-label">
+              Modo câmera
+              <span class="switch-sub">Câmera frontal com o texto sobreposto</span>
+            </span>
+            <input type="checkbox" id="cameraToggle" aria-label="Abrir a câmera ao iniciar a apresentação">
+            <span class="switch-track" aria-hidden="true"></span>
+          </label>
+          <p class="setting-note" id="cameraHint">A câmera frontal é ativada ao iniciar a apresentação. O texto não é gravado.</p>
+        </div>
       </div>
     </section>
 
     <div class="start-bar" id="startBar">
       <button type="button" class="btn btn-primary btn-start" id="startBtn" disabled>
         <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M8 5v14l11-7z" fill="currentColor"/></svg>
-        Iniciar teleprompter
+        <span id="startLabel">Iniciar teleprompter</span>
       </button>
       <p class="start-hint" id="startHint">Digite ou cole um roteiro para liberar o botão.</p>
     </div>
@@ -138,8 +150,19 @@
   </main>
 
   <section class="presentation" id="presentationView" hidden aria-label="Modo de apresentação">
+    <div class="camera-layer" id="cameraLayer" hidden aria-hidden="true">
+      <video class="camera-preview" id="cameraPreview" autoplay playsinline muted></video>
+      <div class="camera-shade"></div>
+    </div>
+
     <div class="progress" id="progressTrack" role="progressbar" aria-label="Progresso da leitura" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">
       <div class="progress-fill" id="progressFill"></div>
+    </div>
+
+    <div class="rec-badge" id="recBadge" hidden aria-live="off">
+      <span class="rec-dot" aria-hidden="true"></span>
+      <span class="rec-badge-label">REC</span>
+      <span class="rec-time" id="recTime">0:00</span>
     </div>
 
     <div class="stage" id="stage">
@@ -154,8 +177,6 @@
       <span class="countdown-number" id="countdownValue">3</span>
     </div>
 
-    <div class="toast" id="toast" role="status" aria-live="polite"></div>
-
     <div class="present-controls" id="presentControls">
       <div class="control-row control-row-top">
         <div class="speed-control">
@@ -167,10 +188,15 @@
             <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M11 5h2v6h6v2h-6v6h-2v-6H5v-2h6z" fill="currentColor"/></svg>
           </button>
         </div>
-        <button type="button" class="ctrl-btn icon-btn" id="fullscreenBtn" aria-label="Entrar em tela cheia" title="Tela cheia">
-          <svg class="icon-expand" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M4 9V4h5v2H6v3H4zm16 0V4h-5v2h3v3h2zM4 15v5h5v-2H6v-3H4zm16 0v5h-5v-2h3v-3h2z" fill="currentColor"/></svg>
-          <svg class="icon-compress" viewBox="0 0 24 24" aria-hidden="true" focusable="false" hidden><path d="M9 4v5H4v2h7V4H9zm6 0v5h5v2h-7V4h2zM4 13h5v5h2v-7H4v2zm16 0h-5v5h-2v-7h7v2z" fill="currentColor"/></svg>
-        </button>
+        <div class="control-row-actions">
+          <button type="button" class="ctrl-btn icon-btn" id="cameraBtn" aria-label="Ligar câmera" aria-pressed="false" title="Ligar câmera" data-state="off">
+            <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M9 4h6l1.2 2H20a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h3.8L9 4zm3 3.2a5.3 5.3 0 1 0 0 10.6 5.3 5.3 0 0 0 0-10.6zm0 2.1a3.2 3.2 0 1 1 0 6.4 3.2 3.2 0 0 1 0-6.4z" fill="currentColor"/></svg>
+          </button>
+          <button type="button" class="ctrl-btn icon-btn" id="fullscreenBtn" aria-label="Entrar em tela cheia" title="Tela cheia">
+            <svg class="icon-expand" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M4 9V4h5v2H6v3H4zm16 0V4h-5v2h3v3h2zM4 15v5h5v-2H6v-3H4zm16 0v5h-5v-2h3v-3h2z" fill="currentColor"/></svg>
+            <svg class="icon-compress" viewBox="0 0 24 24" aria-hidden="true" focusable="false" hidden><path d="M9 4v5H4v2h7V4H9zm6 0v5h5v2h-7V4h2zM4 13h5v5h2v-7H4v2zm16 0h-5v5h-2v-7h7v2z" fill="currentColor"/></svg>
+          </button>
+        </div>
       </div>
 
       <div class="control-row control-row-bottom">
@@ -182,12 +208,18 @@
           <svg class="icon-pause" viewBox="0 0 24 24" aria-hidden="true" focusable="false" hidden><path d="M6 5h4v14H6zM14 5h4v14h-4z" fill="currentColor"/></svg>
           <svg class="icon-replay" viewBox="0 0 24 24" aria-hidden="true" focusable="false" hidden><path d="M12 5V2L7 6.5 12 11V8a5.5 5.5 0 1 1-5.5 5.5H4A8 8 0 1 0 12 5z" fill="currentColor"/></svg>
         </button>
+        <button type="button" class="ctrl-btn icon-btn record-btn" id="recordBtn" aria-label="Gravar vídeo" title="Gravar vídeo" data-recording="false" hidden>
+          <svg class="icon-record" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><circle cx="12" cy="12" r="6.5" fill="currentColor"/></svg>
+          <svg class="icon-stop" viewBox="0 0 24 24" aria-hidden="true" focusable="false" hidden><rect x="7" y="7" width="10" height="10" rx="2" fill="currentColor"/></svg>
+        </button>
         <button type="button" class="ctrl-btn" id="exitBtn" aria-label="Voltar à edição" title="Voltar à edição">
           <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M15.4 7.4 14 6l-6 6 6 6 1.4-1.4L10.8 12z" fill="currentColor"/></svg>
         </button>
       </div>
     </div>
   </section>
+
+  <div class="toast" id="toast" role="status" aria-live="polite"></div>
 
   <dialog class="dialog" id="clearDialog" aria-labelledby="clearDialogTitle">
     <h2 id="clearDialogTitle">Limpar o roteiro?</h2>
