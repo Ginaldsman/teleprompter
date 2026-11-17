@@ -1,0 +1,203 @@
+<!DOCTYPE html>
+<html lang="pt-BR" data-theme="dark">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#0b0d10" id="themeColorMeta">
+  <meta name="description" content="Teleprompter para gravar vídeos lendo o texto perto da câmera. Funciona no navegador do celular, offline e sem enviar dados.">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="mobile-web-app-capable" content="yes">
+  <title>Teleprompter</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%23f5c518'/%3E%3Cpath d='M16 22h32M16 32h22M16 42h14' stroke='%23121417' stroke-width='5' stroke-linecap='round'/%3E%3C/svg%3E">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <main class="editor" id="editorView" tabindex="-1">
+    <header class="app-header">
+      <div class="brand">
+        <span class="brand-mark" aria-hidden="true">
+          <svg viewBox="0 0 24 24" focusable="false">
+            <path d="M4 6.5h16M4 12h11M4 17.5h7" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" fill="none"/>
+          </svg>
+        </span>
+        <div class="brand-text">
+          <h1>Teleprompter</h1>
+          <p>Rolagem automática para gravar lendo perto da câmera.</p>
+        </div>
+      </div>
+    </header>
+
+    <section class="card" aria-labelledby="scriptLabel">
+      <div class="card-head">
+        <h2 class="card-title" id="scriptLabel">Roteiro</h2>
+        <button type="button" class="btn btn-small btn-quiet" id="clearTextBtn" disabled>Limpar texto</button>
+      </div>
+      <textarea id="scriptInput" class="script-input" rows="9" placeholder="Cole ou digite o texto que você vai ler..." spellcheck="true" autocapitalize="sentences"></textarea>
+      <div class="script-meta" id="scriptMeta">
+        <span id="wordCount">0 palavras</span>
+        <span id="durationEstimate">sem texto</span>
+      </div>
+    </section>
+
+    <section class="card" aria-labelledby="settingsTitle">
+      <h2 class="card-title" id="settingsTitle">Ajustes</h2>
+      <div class="settings">
+        <div class="setting">
+          <div class="setting-head">
+            <label for="speedRange">Velocidade da rolagem</label>
+            <output id="speedOutput" for="speedRange">130 ppm</output>
+          </div>
+          <input id="speedRange" class="range" type="range" min="60" max="300" step="5" value="130">
+          <div class="range-ends" aria-hidden="true"><span>Mais lenta</span><span>Mais rápida</span></div>
+        </div>
+
+        <div class="setting">
+          <div class="setting-head">
+            <label for="fontRange">Tamanho da fonte</label>
+            <output id="fontOutput" for="fontRange">40 px</output>
+          </div>
+          <input id="fontRange" class="range" type="range" min="24" max="72" step="2" value="40">
+        </div>
+
+        <div class="setting">
+          <div class="setting-head">
+            <label for="lineRange">Altura da linha</label>
+            <output id="lineOutput" for="lineRange">1,50×</output>
+          </div>
+          <input id="lineRange" class="range" type="range" min="1.1" max="2.2" step="0.05" value="1.5">
+        </div>
+
+        <div class="setting">
+          <div class="setting-head">
+            <label for="marginRange">Margens laterais</label>
+            <output id="marginOutput" for="marginRange">6%</output>
+          </div>
+          <input id="marginRange" class="range" type="range" min="0" max="20" step="1" value="6">
+        </div>
+
+        <div class="setting">
+          <span class="setting-label" id="alignLabel">Alinhamento</span>
+          <div class="segmented" role="radiogroup" aria-labelledby="alignLabel">
+            <input type="radio" name="align" id="alignLeft" value="left" checked>
+            <label for="alignLeft">Esquerda</label>
+            <input type="radio" name="align" id="alignCenter" value="center">
+            <label for="alignCenter">Centralizado</label>
+          </div>
+        </div>
+
+        <div class="setting">
+          <span class="setting-label" id="themeLabel">Tema</span>
+          <div class="segmented" role="radiogroup" aria-labelledby="themeLabel">
+            <input type="radio" name="theme" id="themeDark" value="dark" checked>
+            <label for="themeDark">Escuro</label>
+            <input type="radio" name="theme" id="themeLight" value="light">
+            <label for="themeLight">Claro</label>
+          </div>
+        </div>
+
+        <div class="setting">
+          <p class="setting-label">Espelhamento</p>
+          <label class="switch-row">
+            <span class="switch-label">Horizontal</span>
+            <input type="checkbox" id="mirrorH" aria-label="Espelhar horizontalmente">
+            <span class="switch-track" aria-hidden="true"></span>
+          </label>
+          <label class="switch-row">
+            <span class="switch-label">Vertical</span>
+            <input type="checkbox" id="mirrorV" aria-label="Espelhar verticalmente">
+            <span class="switch-track" aria-hidden="true"></span>
+          </label>
+        </div>
+
+        <div class="setting">
+          <label class="switch-row">
+            <span class="switch-label">
+              Contagem regressiva de 3 s
+              <span class="switch-sub">Antes de começar a rolar</span>
+            </span>
+            <input type="checkbox" id="countdownToggle" aria-label="Contagem regressiva de 3 segundos" checked>
+            <span class="switch-track" aria-hidden="true"></span>
+          </label>
+        </div>
+      </div>
+    </section>
+
+    <div class="start-bar" id="startBar">
+      <button type="button" class="btn btn-primary btn-start" id="startBtn" disabled>
+        <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M8 5v14l11-7z" fill="currentColor"/></svg>
+        Iniciar teleprompter
+      </button>
+      <p class="start-hint" id="startHint">Digite ou cole um roteiro para liberar o botão.</p>
+    </div>
+
+    <footer class="app-footer">
+      <p>Texto e ajustes são salvos automaticamente neste navegador. Nada é enviado para a internet.</p>
+      <p class="kbd-hint">Atalhos: <kbd>Espaço</kbd> inicia/pausa · <kbd>Esc</kbd> sai da apresentação.</p>
+    </footer>
+  </main>
+
+  <section class="presentation" id="presentationView" hidden aria-label="Modo de apresentação">
+    <div class="progress" id="progressTrack" role="progressbar" aria-label="Progresso da leitura" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">
+      <div class="progress-fill" id="progressFill"></div>
+    </div>
+
+    <div class="stage" id="stage">
+      <div class="stage-scroll" id="stageScroll">
+        <div class="stage-content" id="stageContent">
+          <div class="stage-text" id="stageText"></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="countdown" id="countdown" hidden>
+      <span class="countdown-number" id="countdownValue">3</span>
+    </div>
+
+    <div class="toast" id="toast" role="status" aria-live="polite"></div>
+
+    <div class="present-controls" id="presentControls">
+      <div class="control-row control-row-top">
+        <div class="speed-control">
+          <button type="button" class="ctrl-btn icon-btn" id="slowerBtn" aria-label="Diminuir velocidade" title="Diminuir velocidade">
+            <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M5 11h14v2H5z" fill="currentColor"/></svg>
+          </button>
+          <span class="speed-readout" id="speedReadout" aria-live="off">130 ppm</span>
+          <button type="button" class="ctrl-btn icon-btn" id="fasterBtn" aria-label="Aumentar velocidade" title="Aumentar velocidade">
+            <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M11 5h2v6h6v2h-6v6h-2v-6H5v-2h6z" fill="currentColor"/></svg>
+          </button>
+        </div>
+        <button type="button" class="ctrl-btn icon-btn" id="fullscreenBtn" aria-label="Entrar em tela cheia" title="Tela cheia">
+          <svg class="icon-expand" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M4 9V4h5v2H6v3H4zm16 0V4h-5v2h3v3h2zM4 15v5h5v-2H6v-3H4zm16 0v5h-5v-2h3v-3h2z" fill="currentColor"/></svg>
+          <svg class="icon-compress" viewBox="0 0 24 24" aria-hidden="true" focusable="false" hidden><path d="M9 4v5H4v2h7V4H9zm6 0v5h5v2h-7V4h2zM4 13h5v5h2v-7H4v2zm16 0h-5v5h-2v-7h7v2z" fill="currentColor"/></svg>
+        </button>
+      </div>
+
+      <div class="control-row control-row-bottom">
+        <button type="button" class="ctrl-btn" id="restartBtn" aria-label="Reiniciar do começo" title="Reiniciar do começo">
+          <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M12 5V2L7 6.5 12 11V8a5.5 5.5 0 1 1-5.5 5.5H4A8 8 0 1 0 12 5z" fill="currentColor"/></svg>
+        </button>
+        <button type="button" class="ctrl-btn btn-play" id="playPauseBtn" aria-label="Iniciar rolagem" title="Iniciar/Pausar">
+          <svg class="icon-play" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M8 5v14l11-7z" fill="currentColor"/></svg>
+          <svg class="icon-pause" viewBox="0 0 24 24" aria-hidden="true" focusable="false" hidden><path d="M6 5h4v14H6zM14 5h4v14h-4z" fill="currentColor"/></svg>
+          <svg class="icon-replay" viewBox="0 0 24 24" aria-hidden="true" focusable="false" hidden><path d="M12 5V2L7 6.5 12 11V8a5.5 5.5 0 1 1-5.5 5.5H4A8 8 0 1 0 12 5z" fill="currentColor"/></svg>
+        </button>
+        <button type="button" class="ctrl-btn" id="exitBtn" aria-label="Voltar à edição" title="Voltar à edição">
+          <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M15.4 7.4 14 6l-6 6 6 6 1.4-1.4L10.8 12z" fill="currentColor"/></svg>
+        </button>
+      </div>
+    </div>
+  </section>
+
+  <dialog class="dialog" id="clearDialog" aria-labelledby="clearDialogTitle">
+    <h2 id="clearDialogTitle">Limpar o roteiro?</h2>
+    <p>Todo o texto será apagado deste navegador. Essa ação não pode ser desfeita.</p>
+    <div class="dialog-actions">
+      <button type="button" class="btn btn-quiet" id="cancelClearBtn">Cancelar</button>
+      <button type="button" class="btn btn-danger" id="confirmClearBtn">Limpar texto</button>
+    </div>
+  </dialog>
+
+  <script src="app.js"></script>
+</body>
+</html>
